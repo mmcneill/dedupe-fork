@@ -12,6 +12,7 @@ import dedupe.core as core
 import dedupe.training as training
 import dedupe.datamodel as datamodel
 from dedupe._typing import TrainingExample
+import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -56,9 +57,11 @@ class DedupeSampler(object):
                                                   random_sample_size))
         data = dict(data)
 
+        realized_blocked_proportion = len(blocked_sample_keys) / (random_sample_size + len(blocked_sample_keys))
+
         return [(data[k1], data[k2])
                 for k1, k2
-                in blocked_sample_keys | random_sample_keys]
+                in blocked_sample_keys | random_sample_keys], realized_blocked_proportion
 
 
 class RecordLinkSampler(object):
@@ -85,9 +88,11 @@ class RecordLinkSampler(object):
         unique_random_sample_keys = {(a, b + offset)
                                      for a, b in random_sample_keys}
 
+        realized_blocked_proportion = len(blocked_sample_keys) / (random_sample_size + len(blocked_sample_keys))
+
         return [(data_1[k1], data_2[k2])
                 for k1, k2
-                in blocked_sample_keys | unique_random_sample_keys]
+                in blocked_sample_keys | unique_random_sample_keys], realized_blocked_proportion
 
 
 class RLRLearner(ActiveLearner, rlr.RegularizedLogisticRegression):
@@ -349,6 +354,21 @@ class DisagreementLearner(ActiveLearner):
 
         probs = numpy.concatenate(probs_l, axis=1)
 
+        probs_df = pd.DataFrame(probs, columns=['rlr_phat', 'block_yhat'])
+        probs_df['rlr_yhat'] = (probs_df['rlr_phat'] > .5).astype(int)
+        probs_df['block_yhat'] = probs_df['block_yhat'].astype(int)
+        stats = {
+            'count__same_block_low_phat': probs_df[(probs_df.block_yhat == 1) & (probs_df.rlr_yhat == 0)].shape[0],
+            'mean_phat__same_block_low_phat': probs_df[(probs_df.block_yhat == 1) & (probs_df.rlr_yhat == 0)].rlr_phat.mean(),
+            'count__diff_block_low_phat': probs_df[(probs_df.block_yhat == 0) & (probs_df.rlr_yhat == 0)].shape[0],
+            'mean_phat__diff_block_low_phat': probs_df[(probs_df.block_yhat == 0) & (probs_df.rlr_yhat == 0)].rlr_phat.mean(),
+            'count__diff_block_high_phat': probs_df[(probs_df.block_yhat == 0) & (probs_df.rlr_yhat == 1)].shape[0],
+            'mean_phat__diff_block_high_phat': probs_df[(probs_df.block_yhat == 0) & (probs_df.rlr_yhat == 1)].rlr_phat.mean(),
+            'count__same_block_high_phat': probs_df[(probs_df.block_yhat == 1) & (probs_df.rlr_yhat == 1)].shape[0],
+            'mean_phat__same_block_high_phat': probs_df[(probs_df.block_yhat == 1) & (probs_df.rlr_yhat == 1)].rlr_phat.mean()
+        }
+
+
         # where do the classifers disagree?
         disagreement = numpy.std(probs > 0.5, axis=1).astype(bool)  # type: ignore
 
@@ -368,7 +388,7 @@ class DisagreementLearner(ActiveLearner):
         for learner in self.learners:
             learner._remove(uncertain_index)
 
-        return uncertain_pair
+        return uncertain_pair, probs[uncertain_index], stats
 
     def mark(self, pairs, y):
 
@@ -422,7 +442,7 @@ class DedupeDisagreementLearner(DedupeSampler, DisagreementLearner):
 
         data = core.index(data)
 
-        self.candidates = self._sample(data, blocked_proportion, sample_size)
+        self.candidates, self.realized_blocked_proportion = self._sample(data, blocked_proportion, sample_size)
 
         random_pair = random.choice(self.candidates)
         exact_match = (random_pair[0], random_pair[0])
@@ -463,10 +483,10 @@ class RecordLinkDisagreementLearner(RecordLinkSampler, DisagreementLearner):
         offset = len(data_1)
         data_2 = core.index(data_2, offset)
 
-        self.candidates = self._sample(data_1,
-                                       data_2,
-                                       blocked_proportion,
-                                       sample_size)
+        self.candidates, self.realized_blocked_proportion = self._sample(data_1,
+                                                                         data_2,
+                                                                         blocked_proportion,
+                                                                         sample_size)
 
         random_pair = random.choice(self.candidates)
         exact_match = (random_pair[0], random_pair[0])

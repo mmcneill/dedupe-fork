@@ -1104,7 +1104,8 @@ class ActiveMatching(Matching):
         '''
         assert self.active_learner is not None, \
                "Please initialize with the sample method"
-        return [self.active_learner.pop()]
+        u_ix, u_val, stats = self.active_learner.pop()
+        return [u_ix], [u_val], stats
 
     def mark_pairs(self, labeled_pairs: TrainingData) -> None:
         '''

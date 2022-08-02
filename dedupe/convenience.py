@@ -10,9 +10,10 @@ import dedupe
 from dedupe.core import randomPairs, randomPairsMatch, unique
 from dedupe.canonical import getCanonicalRep
 from dedupe._typing import Data, TrainingData, RecordDict, TrainingExample, Literal, RecordID
+import pandas as pd
 
 
-def console_label(deduper: dedupe.api.ActiveMatching) -> None:  # pragma: no cover
+def console_label(deduper: dedupe.api.ActiveMatching, verbose=False) -> None:  # pragma: no cover
     '''
    Train a matcher instance (Dedupe, RecordLink, or Gazetteer) from the command line.
    Example
@@ -34,16 +35,26 @@ def console_label(deduper: dedupe.api.ActiveMatching) -> None:  # pragma: no cov
     examples_buffer: List[Tuple[TrainingExample, Literal['match', 'distinct', 'uncertain']]] = []
     uncertain_pairs: List[TrainingExample] = []
 
+    label_info_rows = []
+
+    ix = 0
     while not finished:
+        ix = ix + 1
         if use_previous:
             record_pair, _ = examples_buffer.pop(0)
             use_previous = False
         else:
             try:
                 if not uncertain_pairs:
-                    uncertain_pairs = deduper.uncertain_pairs()
+                    uncertain_pairs, uncertainties, stats = deduper.uncertain_pairs()
 
                 record_pair = uncertain_pairs.pop()
+                if verbose:
+                    print(record_pair[0])
+                    print('<==>')
+                    print(record_pair[1])
+                uncertainties = uncertainties.pop()
+
             except IndexError:
                 break
 
@@ -77,6 +88,15 @@ def console_label(deduper: dedupe.api.ActiveMatching) -> None:  # pragma: no cov
             if user_input in valid_responses:
                 valid_response = True
 
+        this_res = {
+           'label_ix':ix,
+           'label':user_input,
+           'match_phat':uncertainties[0],
+           'block_yhat':uncertainties[1],
+        }
+        this_res.update(stats)
+        label_info_rows.append(this_res.copy())
+
         if user_input == 'y':
             examples_buffer.insert(0, (record_pair, 'match'))
         elif user_input == 'n':
@@ -107,6 +127,10 @@ def console_label(deduper: dedupe.api.ActiveMatching) -> None:  # pragma: no cov
             examples = {'distinct': [], 'match': []}
             examples[label].append(record_pair)  # type: ignore
             deduper.mark_pairs(examples)
+
+    label_info = pd.DataFrame.from_records(label_info_rows)
+
+    return label_info
 
 
 def training_data_link(data_1: Data,
